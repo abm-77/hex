@@ -23,18 +23,18 @@ const LexError = struct {
     }
 };
 
+pub const TokenList = std.ArrayList(Token);
+const ErrorList = std.ArrayList(LexError);
 const LexResult = struct {
     const Self = @This();
-    const TokenArray = std.ArrayList(Token);
-    const ErrorArray = std.ArrayList(LexError);
 
-    tokens: TokenArray,
-    errors: ErrorArray,
+    tokens: TokenList,
+    errors: ErrorList,
 
     pub fn init(allocator: std.mem.Allocator) LexResult {
         return .{
-            .tokens = TokenArray.init(allocator),
-            .errors = ErrorArray.init(allocator),
+            .tokens = TokenList.init(allocator),
+            .errors = ErrorList.init(allocator),
         };
     }
     pub fn ok(self: Self) bool {
@@ -59,7 +59,7 @@ const LexResult = struct {
     }
 };
 
-const TokenType = enum {
+pub const TokenType = enum {
     // general tokens
     TOKEN_LEFT_PAREN,
     TOKEN_RIGHT_PAREN,
@@ -97,6 +97,11 @@ const TokenType = enum {
     TOKEN_INT_LITERAL,
 
     // keywords
+    TOKEN_VOID,
+    TOKEN_CONST,
+    TOKEN_VAR,
+    TOKEN_INT,
+    TOKEN_IMPORT,
     TOKEN_STRUCT,
     TOKEN_FUNC,
     TOKEN_CTRL_FOR,
@@ -105,6 +110,7 @@ const TokenType = enum {
     TOKEN_CTRL_CONTINUE,
     TOKEN_COND_IF,
     TOKEN_COND_ELSE,
+    TOKEN_BOOL,
     TOKEN_BOOL_OR,
     TOKEN_BOOL_AND,
     TOKEN_BOOL_TRUE,
@@ -113,10 +119,18 @@ const TokenType = enum {
 
     TOKEN_COMMENT,
     TOKEN_SPACE,
+    TOKEN_TYPE,
     TOKEN_EOF,
+    TOKEN_INVALID,
 };
 
 const KEYWORDS = std.StaticStringMap(TokenType).initComptime(.{
+    .{ "void", .TOKEN_VOID },
+    .{ "const", .TOKEN_CONST },
+    .{ "var", .TOKEN_VAR },
+    .{ "int", .TOKEN_INT },
+    .{ "bool", .TOKEN_BOOL },
+    .{ "import", .TOKEN_IMPORT },
     .{ "struct", .TOKEN_STRUCT },
     .{ "func", .TOKEN_FUNC },
     .{ "for", .TOKEN_CTRL_FOR },
@@ -149,7 +163,7 @@ const SourceSpan = struct {
     }
 };
 
-const Token = struct {
+pub const Token = struct {
     ty: TokenType,
     lexeme: []const u8,
     span: SourceSpan,
@@ -202,17 +216,6 @@ pub const Lexer = struct {
         return char;
     }
 
-    fn make_token(self: *Self, ty: TokenType) Token {
-        return Token{
-            .ty = ty,
-            .span = SourceSpan{
-                .start = self.start_pos,
-                .end = self.curr_pos,
-            },
-            .lexeme = self.source[self.start_pos.byte_offset..self.curr_pos.byte_offset],
-        };
-    }
-
     fn advance(self: *Self) void {
         _ = self.next_character();
     }
@@ -226,11 +229,16 @@ pub const Lexer = struct {
         }
     }
 
-    fn make_error(self: *Self, ty: LexErrorType) LexError {
-        return .{
+    fn make_token(self: *Self, ty: TokenType) Token {
+        return Token{
             .ty = ty,
-            .location = self.start_pos,
+            .span = SourceSpan{ .start = self.start_pos, .end = self.curr_pos },
+            .lexeme = self.source[self.start_pos.byte_offset..self.curr_pos.byte_offset],
         };
+    }
+
+    fn make_error(self: *Self, ty: LexErrorType) LexError {
+        return .{ .ty = ty, .location = self.start_pos };
     }
 
     fn make_comment(self: *Self) Token {
@@ -248,17 +256,14 @@ pub const Lexer = struct {
         }
         switch (char) {
             '\\' => {
-                const esc = self.next_character();
-                if (esc) |escape| {
-                    switch (escape) {
-                        'n', 't', '\'', '\"', '\\' => {
-                            if (!self.peek_is('\'')) return error.UNTERMINATED_CHARACTER_LITERAL;
-                            _ = self.next_character();
-                            return self.make_token(.TOKEN_CHAR_LITERAL);
-                        },
-                        else => {},
-                    }
-                }
+                if (self.next_character()) |escape| switch (escape) {
+                    'n', 't', '\'', '\"', '\\' => {
+                        if (!self.peek_is('\'')) return error.UNTERMINATED_CHARACTER_LITERAL;
+                        _ = self.next_character();
+                        return self.make_token(.TOKEN_CHAR_LITERAL);
+                    },
+                    else => {},
+                };
                 return error.INVALID_ESCAPE_SEQUENCE;
             },
             '\'', '\"' => return error.INVALID_CHARACTER_LITERAL,
@@ -360,6 +365,7 @@ pub const Lexer = struct {
                 try result.append_error(self.make_error(err));
             }
         }
+        try result.append_token(self.make_token(.TOKEN_EOF));
         return result;
     }
 
